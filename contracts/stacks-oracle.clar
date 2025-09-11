@@ -239,3 +239,68 @@
     )
   )
 )
+
+;; READ-ONLY DATA ACCESS FUNCTIONS
+
+(define-read-only (get-market-details (market-id uint))
+  (map-get? prediction-markets market-id)
+)
+
+(define-read-only (get-participant-position
+    (market-id uint)
+    (participant principal)
+  )
+  (map-get? participant-positions {
+    market-id: market-id,
+    participant: participant,
+  })
+)
+
+(define-read-only (get-protocol-balance)
+  (stx-get-balance (as-contract tx-sender))
+)
+
+(define-read-only (get-current-parameters)
+  {
+    oracle: (var-get oracle-principal),
+    min-stake: (var-get min-stake-threshold),
+    fee-rate: (var-get protocol-fee-rate),
+    market-count: (var-get market-sequence),
+  }
+)
+
+;; ADMINISTRATIVE CONTROL FUNCTIONS
+
+(define-public (update-oracle-address (new-oracle principal))
+  (begin
+    (asserts! (is-eq tx-sender CONTRACT_OWNER) ERR_UNAUTHORIZED)
+    (ok (var-set oracle-principal new-oracle))
+  )
+)
+
+(define-public (adjust-minimum-stake (new-minimum uint))
+  (begin
+    (asserts! (is-eq tx-sender CONTRACT_OWNER) ERR_UNAUTHORIZED)
+    (asserts! (> new-minimum u0) ERR_INVALID_PARAMS)
+    (ok (var-set min-stake-threshold new-minimum))
+  )
+)
+
+(define-public (modify-fee-structure (new-fee-rate uint))
+  (begin
+    (asserts! (is-eq tx-sender CONTRACT_OWNER) ERR_UNAUTHORIZED)
+    (asserts! (<= new-fee-rate u100) ERR_INVALID_PARAMS)
+    (ok (var-set protocol-fee-rate new-fee-rate))
+  )
+)
+
+(define-public (withdraw-protocol-fees (withdrawal-amount uint))
+  (begin
+    (asserts! (is-eq tx-sender CONTRACT_OWNER) ERR_UNAUTHORIZED)
+    (asserts! (<= withdrawal-amount (stx-get-balance (as-contract tx-sender)))
+      ERR_INSUFFICIENT_FUNDS
+    )
+    (try! (as-contract (stx-transfer? withdrawal-amount (as-contract tx-sender) CONTRACT_OWNER)))
+    (ok withdrawal-amount)
+  )
+)
