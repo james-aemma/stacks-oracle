@@ -90,3 +90,90 @@
     (ok new-market-id)
   )
 )
+
+;; PREDICTION SUBMISSION & STAKE MANAGEMENT
+
+(define-public (submit-price-prediction
+    (market-id uint)
+    (direction (string-ascii 8))
+    (stake-amount uint)
+  )
+  (let (
+      (market-data (unwrap! (map-get? prediction-markets market-id) ERR_MARKET_NOT_FOUND))
+      (current-height stacks-block-height)
+    )
+    ;; Validate market timing and status
+    (asserts!
+      (and
+        (>= current-height (get market-start-height market-data))
+        (< current-height (get market-end-height market-data))
+      )
+      ERR_MARKET_INACTIVE
+    )
+
+    ;; Validate prediction parameters
+    (asserts! (or (is-eq direction "bullish") (is-eq direction "bearish"))
+      ERR_INVALID_PREDICTION
+    )
+    (asserts! (>= stake-amount (var-get min-stake-threshold))
+      ERR_INVALID_PREDICTION
+    )
+    (asserts! (<= stake-amount (stx-get-balance tx-sender))
+      ERR_INSUFFICIENT_FUNDS
+    )
+
+    ;; Process stake transfer
+    (try! (stx-transfer? stake-amount tx-sender (as-contract tx-sender)))
+
+    ;; Record participant position
+    (map-set participant-positions {
+      market-id: market-id,
+      participant: tx-sender,
+    } {
+      price-direction: direction,
+      staked-amount: stake-amount,
+      rewards-claimed: false,
+    })
+
+    ;; Update market totals
+    (map-set prediction-markets market-id
+      (merge market-data {
+        bullish-stake-total: (if (is-eq direction "bullish")
+          (+ (get bullish-stake-total market-data) stake-amount)
+          (get bullish-stake-total market-data)
+        ),
+        bearish-stake-total: (if (is-eq direction "bearish")
+          (+ (get bearish-stake-total market-data) stake-amount)
+          (get bearish-stake-total market-data)
+        ),
+      })
+    )
+
+    (ok true)
+  )
+)
+
+;; ORACLE INTEGRATION & MARKET RESOLUTION
+
+(define-public (finalize-market-outcome
+    (market-id uint)
+    (btc-closing-price uint)
+  )
+  (let ((market-data (unwrap! (map-get? prediction-markets market-id) ERR_MARKET_NOT_FOUND)))
+    (asserts! (is-eq tx-sender (var-get oracle-principal)) ERR_ORACLE_RESTRICTED)
+    (asserts! (>= stacks-block-height (get market-end-height market-data))
+      ERR_MARKET_INACTIVE
+    )
+    (asserts! (not (get is-resolved market-data)) ERR_MARKET_INACTIVE)
+    (asserts! (> btc-closing-price u0) ERR_INVALID_PARAMS)
+
+    (map-set prediction-markets market-id
+      (merge market-data {
+        final-btc-price: btc-closing-price,
+        is-resolved: true,
+      })
+    )
+
+    (ok true)
+  )
+)
