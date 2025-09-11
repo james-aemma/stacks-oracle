@@ -177,3 +177,65 @@
     (ok true)
   )
 )
+
+;; REWARD CALCULATION & DISTRIBUTION
+
+(define-public (claim-prediction-rewards (market-id uint))
+  (let (
+      (market-data (unwrap! (map-get? prediction-markets market-id) ERR_MARKET_NOT_FOUND))
+      (participant-data (unwrap!
+        (map-get? participant-positions {
+          market-id: market-id,
+          participant: tx-sender,
+        })
+        ERR_MARKET_NOT_FOUND
+      ))
+    )
+    ;; Validate claim eligibility
+    (asserts! (get is-resolved market-data) ERR_MARKET_INACTIVE)
+    (asserts! (not (get rewards-claimed participant-data)) ERR_REWARD_CLAIMED)
+
+    (let (
+        (winning-direction (if (> (get final-btc-price market-data)
+            (get initial-btc-price market-data)
+          )
+          "bullish"
+          "bearish"
+        ))
+        (total-pool (+ (get bullish-stake-total market-data)
+          (get bearish-stake-total market-data)
+        ))
+        (winning-pool-size (if (is-eq winning-direction "bullish")
+          (get bullish-stake-total market-data)
+          (get bearish-stake-total market-data)
+        ))
+      )
+      ;; Verify participant backed winning direction
+      (asserts! (is-eq (get price-direction participant-data) winning-direction)
+        ERR_INVALID_PREDICTION
+      )
+
+      (let (
+          (gross-rewards (/ (* (get staked-amount participant-data) total-pool)
+            winning-pool-size
+          ))
+          (protocol-fee (/ (* gross-rewards (var-get protocol-fee-rate)) u100))
+          (net-payout (- gross-rewards protocol-fee))
+        )
+        ;; Execute reward transfers
+        (try! (as-contract (stx-transfer? net-payout (as-contract tx-sender) tx-sender)))
+        (try! (as-contract (stx-transfer? protocol-fee (as-contract tx-sender) CONTRACT_OWNER)))
+
+        ;; Mark rewards as claimed
+        (map-set participant-positions {
+          market-id: market-id,
+          participant: tx-sender,
+        }
+          (merge participant-data { rewards-claimed: true })
+        )
+
+        (ok net-payout)
+      )
+    )
+  )
+)
